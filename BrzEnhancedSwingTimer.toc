@@ -1,5 +1,5 @@
 ## Interface: 11200
-## Title: |cff64fc8aBrz|cffffffffenhanced|cffb0fc64SwingTimer
+## Title: |cffa879ffBrz|cffffffffenhanced|cfff5c542SwingTimer
 ## Author: https://github.com/Brz_Admin
 ## Version: 1.0.0
 ## Notes: Auto-Attack Swing Timer. Chat command: |cffa050ff/brest|r
@@ -11,3 +11,8 @@ Libs\AceLocale-2.2\AceLocale-2.2.lua
 Libs\Babble-Spell-2.2\Babble-Spell-2.2.lua
 
 core.lua
+media.lua
+utils.lua
+parser.lua
+barFrame.lua
+configMenu.lua
