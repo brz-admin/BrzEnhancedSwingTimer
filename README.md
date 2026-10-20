@@ -1,6 +1,7 @@
 # BReST
-
 Brz enhanced SwingTimer.
+<img width="1212" height="723" alt="image" src="https://github.com/user-attachments/assets/a89f37bb-ac4e-4fdb-8a90-1be09cdf81d9" />
+
 
 A swing timer for World of Warcraft 1.12 (vanilla). It shows one bar for your main hand, off hand and ranged weapon, and has a settings window that controls how they look, move and hide.
 
