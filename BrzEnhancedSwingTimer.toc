@@ -1,8 +1,8 @@
 ## Interface: 11200
-## Title: |cffa879ffBrz|cffffffffenhanced|cfff5c542SwingTimer
+## Title: |cffa879ffBR|cffffffffe|cfff5c542ST
 ## Author: https://github.com/Brz_Admin
 ## Version: 1.0.0
-## Notes: Auto-Attack Swing Timer. Chat command: |cffa050ff/brest|r
+## Notes: Brz enhanced SwingTimer - auto-attack swing timer. Chat command: |cffa879ff/brest|r
 ## SavedVariablesPerCharacter: BReST_Profiles
 ## SavedVariables: BReST_Config
 

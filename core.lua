@@ -1,6 +1,9 @@
 BReST = {}
 BReST.name = "BrzEnhancedSwingTimer" -- Folder name, which is what ADDON_LOADED reports
-BReST.version = "1.0.0" -- Version of the addon
+-- Version of the addon, the one of the .toc
+BReST.version = (GetAddOnMetadata and GetAddOnMetadata(BReST.name, "Version")) or "1.0.0"
+BReST.url = "github.com/brz-admin/BrzEnhancedSwingTimer"
+BReST.prefix = "BReST" -- prefix of the addon messages used to compare versions
 BReST.BS = AceLibrary("Babble-Spell-2.3")
 
 local function copy(value)
@@ -266,6 +269,7 @@ function BReST.Init()
     if type(BReST_Config) ~= "table" then BReST_Config = {} end
     if type(BReST_Profiles) ~= "table" then BReST_Profiles = {} end
     if BReST_Config.profile == nil then BReST_Config.profile = BReST.defaultProfile end
+    if BReST_Config.checkUpdates == nil then BReST_Config.checkUpdates = true end
     if type(BReST_Profiles[BReST_Config.profile]) ~= "table" then BReST_Profiles[BReST_Config.profile] = {} end
 
     for _, profile in pairs(BReST_Profiles) do
@@ -432,6 +436,68 @@ function BReST.UpdateQueued()
     end
 end
 
+-- Versions ---------------------------------------------------------------------------------
+-- An addon can't ask a server for the latest version, so the players that have the addon tell
+-- each other which one they run (guild, party and raid) and the older one gets a notice.
+
+local function parseVersion(v)
+    local s, e, major, minor, patch = string.find(v or "", "^(%d+)%.?(%d*)%.?(%d*)")
+    return tonumber(major) or 0, tonumber(minor) or 0, tonumber(patch) or 0
+end
+
+-- -1, 0 or 1 when a is older than, the same as or newer than b
+function BReST.CompareVersions(a, b)
+    local a1, a2, a3 = parseVersion(a)
+    local b1, b2, b3 = parseVersion(b)
+    if a1 ~= b1 then return a1 < b1 and -1 or 1 end
+    if a2 ~= b2 then return a2 < b2 and -1 or 1 end
+    if a3 ~= b3 then return a3 < b3 and -1 or 1 end
+    return 0
+end
+
+function BReST.CheckEnabled()
+    return BReST_Config == nil or BReST_Config.checkUpdates ~= false
+end
+
+BReST.newerVersion = nil -- the newest version somebody else runs, once it is newer than ours
+BReST.versionDelay = nil -- seconds before the first broadcast, the guild is not known right at login
+
+local lastSent = {}
+
+function BReST.BroadcastVersion()
+    if not BReST.ready or not BReST.CheckEnabled() then return end
+
+    local channels = {}
+    if GetGuildInfo("player") then table.insert(channels, "GUILD") end
+    if GetNumRaidMembers() > 0 then
+        table.insert(channels, "RAID")
+    elseif GetNumPartyMembers() > 0 then
+        table.insert(channels, "PARTY")
+    end
+
+    -- The group events fire a lot, one message per channel every 30 seconds is plenty
+    local now = GetTime()
+    for i = 1, table.getn(channels) do
+        local channel = channels[i]
+        if lastSent[channel] == nil or now - lastSent[channel] > 30 then
+            lastSent[channel] = now
+            SendAddonMessage(BReST.prefix, "V:" .. BReST.version, channel)
+        end
+    end
+end
+
+function BReST.OnVersion(message)
+    local s, e, version = string.find(message or "", "^V:([%d%.]+)$")
+    if not version or not BReST.CheckEnabled() then return end
+
+    if BReST.CompareVersions(version, BReST.version) > 0
+        and (BReST.newerVersion == nil or BReST.CompareVersions(version, BReST.newerVersion) > 0) then
+        BReST.newerVersion = version
+        BReST.Print("version " .. version .. " is out (you have " .. BReST.version .. "): " .. BReST.url)
+        if BReST.ConfigUI then BReST.ConfigUI.RefreshTitle() end
+    end
+end
+
 -- Events -----------------------------------------------------------------------------------
 
 BReST.frame = CreateFrame("Frame")
@@ -441,6 +507,9 @@ BReST.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 BReST.frame:RegisterEvent("PLAYER_REGEN_ENABLED")
 BReST.frame:RegisterEvent("PLAYER_REGEN_DISABLED")
 BReST.frame:RegisterEvent("UNIT_INVENTORY_CHANGED")
+BReST.frame:RegisterEvent("CHAT_MSG_ADDON")
+BReST.frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+BReST.frame:RegisterEvent("RAID_ROSTER_UPDATE")
 BReST.frame:RegisterEvent("SPELLS_CHANGED")
 BReST.frame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 BReST.frame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
@@ -477,6 +546,21 @@ function BReST.frame:PLAYER_ENTERING_WORLD()
     BReST.ScanSpellBook()
     BReST.ScanActions()
     BReST.CheckWeapons()
+    BReST.versionDelay = 8
+end
+
+-- The other players' versions (the handler only gets arg1, the rest are globals)
+function BReST.frame:CHAT_MSG_ADDON(prefix)
+    if prefix ~= BReST.prefix or arg4 == UnitName("player") then return end
+    BReST.OnVersion(arg2)
+end
+
+function BReST.frame:PARTY_MEMBERS_CHANGED()
+    BReST.BroadcastVersion()
+end
+
+function BReST.frame:RAID_ROSTER_UPDATE()
+    BReST.BroadcastVersion()
 end
 
 function BReST.frame:SPELLS_CHANGED()
@@ -564,6 +648,14 @@ BReST.frame:SetScript("OnUpdate", function()
         end
 
         BReST.UpdateQueued()
+
+        if BReST.versionDelay then
+            BReST.versionDelay = BReST.versionDelay - elapsed
+            if BReST.versionDelay <= 0 then
+                BReST.versionDelay = nil
+                BReST.BroadcastVersion()
+            end
+        end
 
         -- Update bar frame
         BReST.Frame.update(elapsed)

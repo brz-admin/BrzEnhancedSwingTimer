@@ -1348,6 +1348,10 @@ local function buildGeneral(content)
     P.Row(Slider(P.child, "Update interval (s)", 0.01, 0.2, 0.01, Bind(prof, "updateTime")), false)
     P.Note("Lower is smoother. The bars are redrawn at most once per interval.", 1)
 
+    P.Section("Updates")
+    P.Row(Checkbox(P.child, "Tell me when a newer version is out", Bind(function() return BReST_Config end, "checkUpdates")))
+    P.Note("Players who have the addon share their version in guild, party and raid chat. This is how a newer one is noticed, nothing else is sent.", 2)
+
     P.Finish()
     return P
 end
@@ -1671,6 +1675,19 @@ function UI.RefreshPage()
     UI.pages[UI.current].Refresh()
 end
 
+-- The version next to the title, with a notice when another player runs a newer one
+function UI.RefreshTitle()
+    if not UI.built then return end
+    local fs = UI.titleVersion
+    if BReST.newerVersion then
+        fs:SetText("v" .. BReST.version .. "  -  v" .. BReST.newerVersion .. " is out: " .. BReST.url)
+        fs:SetTextColor(T.gold[1], T.gold[2], T.gold[3], 1)
+    else
+        fs:SetText("v" .. BReST.version)
+        fs:SetTextColor(T.dim[1], T.dim[2], T.dim[3], 1)
+    end
+end
+
 function UI.RefreshFooter()
     if not UI.built then return end
     local f = BReST.Frame
@@ -1739,10 +1756,13 @@ local function buildTitle(W)
     title.line:SetPoint("BOTTOMRIGHT", title, "BOTTOMRIGHT", 0, 0)
     title.line:SetHeight(1)
 
-    title.text = label(title, "|cffa879ffBrz|r|cffffffffenhanced|r|cfff5c542SwingTimer|r", 13, T.text, true)
+    title.text = label(title, "|cffa879ffBR|r|cffffffffe|r|cfff5c542ST|r", 15, T.text, true)
     title.text:SetPoint("LEFT", title, "LEFT", 16, 0)
+    title.sub = label(title, "Brz enhanced SwingTimer", 10, T.dim)
+    title.sub:SetPoint("LEFT", title.text, "RIGHT", 8, -1)
     title.version = label(title, "v" .. BReST.version, 10, T.dim)
-    title.version:SetPoint("LEFT", title.text, "RIGHT", 8, -1)
+    title.version:SetPoint("LEFT", title.sub, "RIGHT", 8, 0)
+    UI.titleVersion = title.version
 
     local close = CreateFrame("Button", nil, title)
     close:SetWidth(34)
@@ -1875,6 +1895,7 @@ function UI.Build()
     UI.pages.profiles = buildProfiles(content)
 
     UI.built = true
+    UI.RefreshTitle()
 
     W:SetScript("OnShow", function()
         local f = BReST.Frame
