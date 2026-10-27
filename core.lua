@@ -398,10 +398,15 @@ BReST.queuedTexture = nil
 
 function BReST.ScanSpellBook()
     BReST.spellTextures = {}
+    BReST.rangedTextures = {}
     local i = 1
     while true do
         local name = GetSpellName(i, BOOKTYPE_SPELL)
         if not name then break end
+        if BReST.rangedSpells[name] then
+            local texture = GetSpellTexture(i, BOOKTYPE_SPELL)
+            if texture then BReST.rangedTextures[texture] = true end
+        end
         if BReST.onSwingSpells[name] then
             BReST.spellTextures[name] = GetSpellTexture(i, BOOKTYPE_SPELL)
         end
@@ -514,6 +519,10 @@ BReST.frame:RegisterEvent("SPELLS_CHANGED")
 BReST.frame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 BReST.frame:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
 BReST.frame:RegisterEvent("UPDATE_BONUS_ACTIONBAR")
+BReST.frame:RegisterEvent("SPELLCAST_START")
+BReST.frame:RegisterEvent("SPELLCAST_STOP")
+BReST.frame:RegisterEvent("SPELLCAST_FAILED")
+BReST.frame:RegisterEvent("SPELLCAST_INTERRUPTED")
 BReST.frame:RegisterEvent("CHAT_MSG_COMBAT_SELF_MISSES")
 BReST.frame:RegisterEvent("CHAT_MSG_COMBAT_SELF_HITS")
 BReST.frame:RegisterEvent("CHAT_MSG_SPELL_SELF_DAMAGE")
@@ -545,6 +554,8 @@ function BReST.frame:PLAYER_ENTERING_WORLD()
     BReST.Frame.restorePosition()
     BReST.ScanSpellBook()
     BReST.ScanActions()
+    BReST.ammo = {}
+    BReST.CheckAmmo()
     BReST.CheckWeapons()
     BReST.versionDelay = 8
 end
@@ -590,6 +601,7 @@ end
 
 function BReST.frame:UNIT_INVENTORY_CHANGED(arg1)
     if arg1 == "player" and BReST.ready then
+        BReST.CheckAmmo()
         BReST.CheckWeapons()
     end
 end
@@ -614,12 +626,131 @@ function BReST.frame:CHAT_MSG_SPELL_SELF_DAMAGE(arg1)
     if spellName == nil then return end
 
     if BReST.rangedSpells[spellName] then
+        -- This line is the projectile landing. When the timer already started at the shot
+        -- (SPELLCAST_START/STOP below) it must not restart it. It is the only signal for
+        -- shots that never send those events.
+        local sinceFired = GetTime() - (BReST.rangedFiredAt or -100)
+        if sinceFired < BReST.RANGED_IMPACT_WINDOW then
+            BReST.Debug("ranged " .. spellName .. " " .. outcome .. " landed, timer already started")
+            return
+        end
         BReST.Debug("ranged " .. spellName .. " " .. outcome .. " -> RANGED")
         BReST.Start("RANGED")
     elseif BReST.nextSwingSpells[spellName] then
         BReST.Debug("swing replaced by " .. spellName .. " " .. outcome .. " -> MAIN")
         BReST.Start("MAIN")
     end
+end
+
+-- The shot leaves the weapon when the cast ends, the damage line only comes once the projectile
+-- has travelled to the target, so the ranged timer starts on the cast.
+-- Auto Shot sends no cast event in 1.12, so the shot is detected by the ammo (or the thrown
+-- weapon) being spent: that happens when the shot leaves, not when it lands. The other shots
+-- (Arcane Shot, Multi-Shot, Aimed Shot...) spend ammo too and don't touch the swing timer, so
+-- they are filtered out by watching what the player cast.
+BReST.RANGED_IMPACT_WINDOW = 1.0 -- seconds after a shot during which its damage line is ignored
+BReST.MANUAL_SHOT_WINDOW = 0.7 -- seconds an ability keeps claiming the ammo it spends
+BReST.rangedFiredAt = nil
+BReST.manualAt = nil -- last time the player used an ability that is not a ranged auto attack
+BReST.manualCasting = false -- a cast time ability (Aimed Shot) is being cast
+BReST.rangedTextures = {} -- icons of the ranged auto attacks, to tell their buttons apart
+BReST.ammo = {} -- slot -> { link, count } as last seen
+
+-- A ranged auto attack left the weapon, from any of the signals. Several can report the same
+-- shot, the later ones are dropped.
+function BReST.OnRangedFired(source)
+    local now = GetTime()
+    if BReST.rangedFiredAt and now - BReST.rangedFiredAt < 0.3 then return end
+    BReST.rangedFiredAt = now
+    BReST.Debug("ranged fired (" .. source .. ") -> RANGED")
+    BReST.Start("RANGED")
+end
+
+local function claimedByAbility()
+    if BReST.manualCasting then return true end
+    return BReST.manualAt ~= nil and GetTime() - BReST.manualAt < BReST.MANUAL_SHOT_WINDOW
+end
+
+-- Compares the ammo (slot 0) and the thrown weapon stack (slot 18) with the last time
+function BReST.CheckAmmo()
+    local spent = false
+    local slots = { 0, 18 }
+    for i = 1, 2 do
+        local slot = slots[i]
+        local link = GetInventoryItemLink("player", slot)
+        local count = link and GetInventoryItemCount("player", slot) or 0
+        local last = BReST.ammo[slot]
+        if last and link and last.link == link and count < last.count then
+            spent = true
+        end
+        BReST.ammo[slot] = { link = link, count = count }
+    end
+
+    if not spent or not BReST.utils.hasRanged() then return end
+    if claimedByAbility() then
+        BReST.Debug("ammo spent by an ability, ignored")
+        return
+    end
+    BReST.OnRangedFired("ammo")
+end
+
+local function isRangedAttack(name)
+    if name == nil then return true end
+    local bare = string.gsub(name, "%s*%b()", "")
+    return BReST.rangedSpells[name] or BReST.rangedSpells[bare]
+end
+
+local function markAbility(name)
+    if not isRangedAttack(name) then BReST.manualAt = GetTime() end
+end
+
+-- Abilities started from a button or a macro. Their ammo must not start the timer.
+local useAction, castSpell, castSpellByName = UseAction, CastSpell, CastSpellByName
+
+UseAction = function(slot, a, b)
+    if slot and HasAction(slot) and not BReST.rangedTextures[GetActionTexture(slot) or ""] then
+        BReST.manualAt = GetTime()
+    end
+    return useAction(slot, a, b)
+end
+
+CastSpell = function(index, book)
+    markAbility(GetSpellName(index, book))
+    return castSpell(index, book)
+end
+
+CastSpellByName = function(name, onSelf)
+    markAbility(name)
+    return castSpellByName(name, onSelf)
+end
+
+function BReST.frame:SPELLCAST_START(arg1)
+    if BReST.rangedSpells[arg1] then
+        BReST.rangedCasting = arg1
+    else
+        BReST.manualCasting = true
+    end
+end
+
+function BReST.frame:SPELLCAST_STOP()
+    if BReST.manualCasting then
+        BReST.manualCasting = false
+        BReST.manualAt = GetTime()
+    end
+    if BReST.rangedCasting then
+        BReST.rangedCasting = nil
+        BReST.OnRangedFired("cast")
+    end
+end
+
+function BReST.frame:SPELLCAST_FAILED()
+    BReST.rangedCasting = nil
+    BReST.manualCasting = false
+end
+
+function BReST.frame:SPELLCAST_INTERRUPTED()
+    BReST.rangedCasting = nil
+    BReST.manualCasting = false
 end
 
 BReST.frame:SetScript("OnUpdate", function()
